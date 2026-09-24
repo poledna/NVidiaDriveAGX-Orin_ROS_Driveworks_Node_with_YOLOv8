@@ -1,0 +1,32 @@
+# Static objects for the static object detector (ROS 2 port of the
+# static_object_detector.launch rosparam list). ROS 2 has no list-of-dict
+# parameters, so list the labels in `static_objects` and give each label
+# its own parameter group. "/**" instead of the node name so that launch file
+# overrides are not ignored (see lidar_camera_fusion.yaml).
+/**:
+  ros__parameters:
+    static_objects: ["pole_1", "building_entrance", "traffic_sign"]
+
+    pole_1:
+      x: 10.0
+      y: 0.0
+      z: 0.0
+      width: 0.5
+      height: 3.0
+      depth: 0.5
+
+    building_entrance:
+      x: 20.0
+      y: 5.0
+      z: 0.0
+      width: 3.0
+      height: 4.0
+      depth: 2.0
+
+    traffic_sign:
+      x: 15.0
+      y: -3.0
+      z: 0.0
+      width: 1.0
+      height: 2.0
+      depth: 1.0

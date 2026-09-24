@@ -2,6 +2,8 @@
 
 A comprehensive ROS Noetic package for NVIDIA DRIVE AGX Orin that integrates YOLO object detection, LiDAR-camera fusion, and 3D object tracking with real-time visualization.
 
+> **ROS 2:** a ROS 2 Foxy version (Ubuntu 20.04, same as the DRIVE OS targetfs) with its own cross-compilation toolchain is in [`ros2_foxy/`](ros2_foxy/README.md).
+
 ## Table of Contents
 
 - [Overview](#overview)
