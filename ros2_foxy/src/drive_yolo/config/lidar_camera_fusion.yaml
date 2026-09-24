@@ -1,0 +1,52 @@
+# LiDAR-Camera fusion parameters (ROS 2 port of lidar_camera_fusion.launch)
+# NOTE: ROS 2 parameters are typed - keep the decimal point on float values.
+# The "/**" key (instead of the node name) is on purpose: in Foxy node-name keys
+# always win over the "/**" parameters launch_ros generates, which would make
+# overrides from the launch files / command line silently ignored.
+/**:
+  ros__parameters:
+    # Camera calibration parameters
+    camera_matrix: [3145.24132, 0.0, 1887.68485, 0.0, 3166.08502, 990.62304, 0.0, 0.0, 1.0]
+    distortion_coefficients: [-0.298671, 0.087807, 0.000383, 0.000551, 0.000000]
+
+    # Image dimensions
+    image_width: 3848
+    image_height: 2168
+
+    # Frame configuration
+    use_tf_transforms: true
+    lidar_frame: lidar
+    camera_frame: camera_entron
+    base_frame: car_rear_axle
+
+    # Distance filtering
+    max_distance: 250.0
+    min_distance: 0.5          # Lowered to 0.5m to detect close pedestrians
+    debug_visualization: true
+    transform_timeout: 0.1
+
+    # Synchronization (see sync_diagnostics.launch.py)
+    sync_time_slop: 0.1        # Time tolerance for matching messages (s)
+    sync_queue_size: 20        # Increase if messages get dropped
+    time_offset_ms: 0.0        # Positive = camera ahead of LiDAR
+
+    # Ground filtering (disabled for now)
+    enable_ground_filtering: false
+    ground_height_threshold: 0.1
+    lidar_height_above_ground: 1.383
+
+    # Point clustering - ENABLED to filter rain/noise
+    enable_point_clustering: true
+    max_point_distance_from_center: 300.0   # Set high for distant objects
+    min_points_for_object: 3                # Lowered to 3 to allow distant objects
+    point_density_threshold: 0.1
+    max_object_height: 6.0                  # Increased to 6m for trucks/buses
+    max_object_width: 5.0                   # Increased to 5m for large vehicles
+    outlier_distance_threshold: 5.0         # Tighter clustering
+
+    # ROI filtering - Front-facing LiDAR with lateral barriers
+    enable_roi_filtering: true
+    roi_x_min: 0.0      # Forward min: at vehicle
+    roi_x_max: 50.0     # Forward max: 50m
+    roi_y_min: -2.0     # Right limit: 2m
+    roi_y_max: 7.0      # Left limit: 7m
