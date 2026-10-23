@@ -1,0 +1,22 @@
+<launch>
+    <!-- DriveWorks camera publishing only - no YOLO / TensorRT model is loaded -->
+    <!-- Publishes /camera/image_raw (bgr8), plus /camera/image_bayer (16-bit) when publish_bayer:=true in raw mode -->
+    
+    <!-- Use output-format=raw to read the sensor's Bayer data and debayer it in the node -->
+    <arg name="camera_params" default="camera-name=F008A120RM0AV2,interface=csi-ab,link=1,output-format=processed" />
+    <arg name="bayer_pattern" default="RGGB" />    <!-- RGGB, BGGR, GRBG or GBRG -->
+    <arg name="raw_bit_depth" default="12" />      <!-- significant bits in the 16-bit raw samples -->
+    <arg name="publish_bayer" default="false" />
+    <arg name="quiet_mode" default="true" />
+    
+    <node name="drive_yolo_node" pkg="drive_yolo" type="drive_yolo_node" output="screen">
+        <param name="enable_yolo" value="false" />
+        <param name="use_driveworks_camera" value="true" />
+        <param name="camera_params" value="$(arg camera_params)" />
+        <param name="bayer_pattern" value="$(arg bayer_pattern)" />
+        <param name="raw_bit_depth" value="$(arg raw_bit_depth)" />
+        <param name="publish_bayer" value="$(arg publish_bayer)" />
+        <param name="quiet_mode" value="$(arg quiet_mode)" />
+    </node>
+    
+</launch>

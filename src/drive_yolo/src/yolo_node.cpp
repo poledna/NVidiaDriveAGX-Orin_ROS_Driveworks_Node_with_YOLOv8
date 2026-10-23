@@ -45,6 +45,13 @@ public:
         nh_.param<bool>("enable_hood_filtering", enable_hood_filtering_, true);
 
         nh_.param<bool>("quiet_mode", quiet_mode_, false);
+        
+        // Camera-only mode: set enable_yolo=false to just publish camera images (no TensorRT/model needed)
+        nh_.param<bool>("enable_yolo", enable_yolo_, true);
+        // RAW camera (output-format=raw) options
+        nh_.param<std::string>("bayer_pattern", bayer_pattern_, "RGGB");
+        nh_.param<int>("raw_bit_depth", raw_bit_depth_, 12);
+        nh_.param<bool>("publish_bayer", publish_bayer_, false);
     
         // Only show config if NOT in quiet mode
         if (!quiet_mode_) {
@@ -64,19 +71,26 @@ public:
         ROS_INFO("Thresholds - Detection: %.2f, Publishing: %.2f", detection_threshold_, confidence_threshold_);
         ROS_INFO("DriveWorks camera: %s", use_driveworks_camera ? "ENABLED" : "DISABLED");
         ROS_INFO("Quiet mode: %s", quiet_mode_ ? "ENABLED" : "DISABLED");
+        ROS_INFO("YOLO: %s", enable_yolo_ ? "ENABLED" : "DISABLED (camera-only mode)");
         
         try {
-            // Initialize YOLO
-            yolo_ = std::make_unique<YoloInfer>(model_path);
-            yolo_->printModelInfo();
-            ROS_INFO("YOLO ready!");
-            
             // Publishers - only the essentials
-            detections_pub_ = nh_.advertise<drive_yolo::Detections>("/detections", 50);
             raw_image_pub_ = nh_.advertise<sensor_msgs::Image>("/camera/image_raw", 5);
+            if (publish_bayer_) {
+                bayer_image_pub_ = nh_.advertise<sensor_msgs::Image>("/camera/image_bayer", 5);
+            }
             running_ = true;
-            // Start processing thread BEFORE camera thread
-            processing_thread_ = std::thread(&YoloNode::processingLoop, this);
+            
+            if (enable_yolo_) {
+                // Initialize YOLO
+                yolo_ = std::make_unique<YoloInfer>(model_path);
+                yolo_->printModelInfo();
+                ROS_INFO("YOLO ready!");
+                
+                detections_pub_ = nh_.advertise<drive_yolo::Detections>("/detections", 50);
+                // Start processing thread BEFORE camera thread
+                processing_thread_ = std::thread(&YoloNode::processingLoop, this);
+            }
             if (use_driveworks_camera) {
 #ifdef USE_DRIVEWORKS
                 std::string camera_params;
@@ -84,7 +98,7 @@ public:
                     "camera-name=F008A120RM0AV2,interface=csi-ab,link=1,output-format=processed");
                 
                 camera_ = std::make_unique<DriveWorksCamera>();
-                if (!camera_->initialize(camera_params) || !camera_->start()) {
+                if (!camera_->initialize(camera_params, bayer_pattern_, raw_bit_depth_) || !camera_->start()) {
                     throw std::runtime_error("DriveWorks camera init failed");
                 }
                 
@@ -105,7 +119,9 @@ public:
             }
             
             ROS_INFO("=== DRIVE YOLO READY ===");
-            ROS_INFO("Publishing: /detections, /camera/image_raw");
+            ROS_INFO("Publishing: %s/camera/image_raw%s",
+                     enable_yolo_ ? "/detections, " : "",
+                     publish_bayer_ ? ", /camera/image_bayer" : "");
             
             // Start timing
             start_time_ = std::chrono::high_resolution_clock::now();
@@ -209,6 +225,7 @@ private:
     ros::Subscriber image_sub_;
     ros::Publisher detections_pub_;
     ros::Publisher raw_image_pub_;
+    ros::Publisher bayer_image_pub_;
     
     std::unique_ptr<YoloInfer> yolo_;
 #ifdef USE_DRIVEWORKS    
@@ -224,6 +241,10 @@ private:
     bool quiet_mode_;
     int ignore_hood_pixels_;
     bool enable_hood_filtering_;
+    bool enable_yolo_;
+    std::string bayer_pattern_;
+    int raw_bit_depth_;
+    bool publish_bayer_;
     
     // Threading
     std::thread camera_thread_;
@@ -319,6 +340,10 @@ private:
         // Republish raw image
         raw_image_pub_.publish(*msg);
         
+        if (!enable_yolo_) {
+            return; // Camera-only mode, nothing to process
+        }
+        
         // Add to processing queue
         ImageFrame frame;
         frame.image = image;
@@ -340,15 +365,27 @@ private:
         ROS_INFO("Camera thread started");
     }
     ImageFrame frame;
+    cv::Mat bayer;
+    const bool want_bayer = publish_bayer_ && camera_ && camera_->isRawMode();
+    if (publish_bayer_ && !want_bayer) {
+        ROS_WARN("publish_bayer is set but camera is not in output-format=raw, /camera/image_bayer stays empty");
+    }
     
     while (running_ && ros::ok()) {
         try {
-            if (camera_ && camera_->getNextFrame(frame.image, frame.timestamp)) {
+            if (camera_ && camera_->getNextFrame(frame.image, frame.timestamp, want_bayer ? &bayer : nullptr)) {
                 // Convert timestamp
                 frame.ros_time =  ros::Time::now(); //convertDeviceTimestamp(frame.timestamp);
                 
                 // Publish raw image immediately
                 publishRawImage(frame.image, frame.ros_time);
+                if (want_bayer && !bayer.empty()) {
+                    publishBayerImage(bayer, frame.ros_time);
+                }
+                
+                if (!enable_yolo_) {
+                    continue; // Camera-only mode
+                }
                 
                 // Add to processing queue (non-blocking)
                 {
@@ -709,6 +746,29 @@ void processingLoop() {
     
     raw_image_pub_.publish(img_msg);
 }
+
+#ifdef USE_DRIVEWORKS
+    // Publishes the untouched 16-bit sensor data, e.g. encoding "bayer_rggb16"
+    void publishBayerImage(const cv::Mat& raw16, const ros::Time& timestamp) {
+        std::string pattern = camera_->bayerPattern();
+        std::transform(pattern.begin(), pattern.end(), pattern.begin(), ::tolower);
+        
+        sensor_msgs::Image img_msg;
+        img_msg.header.stamp = timestamp;
+        img_msg.header.frame_id = "camera";
+        img_msg.height = raw16.rows;
+        img_msg.width = raw16.cols;
+        img_msg.encoding = "bayer_" + pattern + "16";
+        img_msg.is_bigendian = false;
+        img_msg.step = raw16.cols * sizeof(uint16_t);
+        img_msg.data.resize(img_msg.step * img_msg.height);
+        for (int row = 0; row < raw16.rows; ++row) {
+            memcpy(img_msg.data.data() + row * img_msg.step, raw16.ptr<uint8_t>(row), img_msg.step);
+        }
+        
+        bayer_image_pub_.publish(img_msg);
+    }
+#endif
     std::string getClassName(int class_id) {
         /*static const std::vector<std::string> class_names = {
             "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck",

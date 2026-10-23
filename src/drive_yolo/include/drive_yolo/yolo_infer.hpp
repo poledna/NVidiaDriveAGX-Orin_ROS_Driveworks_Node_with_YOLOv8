@@ -87,30 +87,44 @@ public:
     DriveWorksCamera();
     ~DriveWorksCamera();
     
-    bool initialize(const std::string& camera_params);
+    // bayer_pattern / raw_bit_depth are only used when camera_params contains output-format=raw
+    bool initialize(const std::string& camera_params,
+                    const std::string& bayer_pattern = "RGGB",
+                    int raw_bit_depth = 12);
     bool start();
     bool stop();
-    bool getNextFrame(cv::Mat& image, uint64_t& timestamp);
+    // image is always BGR8. In raw mode, raw_bayer (if given) receives the untouched 16-bit Bayer frame.
+    bool getNextFrame(cv::Mat& image, uint64_t& timestamp, cv::Mat* raw_bayer = nullptr);
     void release();
-    
+
     bool isInitialized() const { return initialized_; }
-    
+    bool isRawMode() const { return raw_mode_; }
+    const std::string& bayerPattern() const { return bayer_pattern_; }
+
 private:
     dwContextHandle_t context_;
     dwSALHandle_t sal_;
     dwSensorHandle_t camera_;
     dwCameraFrameHandle_t frame_;
     dwImageHandle_t image_;
-    
+
     bool initialized_;
     bool started_;
-    
+
+    // Raw (Bayer) mode
+    bool raw_mode_;
+    std::string bayer_pattern_;
+    int raw_bit_depth_;
+    int bayer_conversion_code_;
+
     // Image properties
     uint32_t image_width_;
     uint32_t image_height_;
-    
+
     bool initializeDriveWorks();
     void cleanup();
     cv::Mat dwImageToCvMat(dwImageHandle_t dwImage);
+    cv::Mat dwRawImageToCvMat(dwImageHandle_t dwImage);
+    cv::Mat debayer(const cv::Mat& raw16);
 };
 #endif // USE_DRIVEWORKS

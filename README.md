@@ -373,11 +373,16 @@ YOLO object detection node with TensorRT acceleration.
 **Published Topics**:
 - `/detections` (drive_yolo/Detections) - Detected objects with bounding boxes
 - `/camera/image_raw` (sensor_msgs/Image) - Raw camera images
+- `/camera/image_bayer` (sensor_msgs/Image) - Untouched 16-bit Bayer frames (`bayer_<pattern>16`), only with `output-format=raw` and `publish_bayer:=true`
 
 **Parameters**:
 - `model_path` (string): Path to TensorRT engine file
+- `enable_yolo` (bool, default: true): Set to `false` for camera-only mode (no model is loaded, `/detections` is not published)
 - `use_driveworks_camera` (bool): Enable DriveWorks camera interface
-- `camera_params` (string): DriveWorks camera parameters (e.g., "camera-name=...,interface=csi-ab,link=1")
+- `camera_params` (string): DriveWorks camera parameters (e.g., "camera-name=...,interface=csi-ab,link=1"). Both `output-format=processed` and `output-format=raw` are supported
+- `bayer_pattern` (string, default: RGGB): Sensor CFA pattern for raw mode (`RGGB`, `BGGR`, `GRBG`, `GBRG`)
+- `raw_bit_depth` (int, default: 12): Significant bits in the raw samples, used to scale them to 8 bits before debayering
+- `publish_bayer` (bool, default: false): Also publish the undebayered raw frames on `/camera/image_bayer`
 - `confidence_threshold` (double, default: 0.5): Publishing threshold
 - `detection_threshold` (double, default: 0.5): Detection threshold
 - `vehicle_confidence_threshold` (double): Vehicle-specific threshold
@@ -392,6 +397,19 @@ rosrun drive_yolo drive_yolo_node_node \
   _model_path:=/models/yolo11n.engine \
   _use_driveworks_camera:=true \
   _camera_params:="camera-name=F008A120RM0AV2,interface=csi-ab,link=1,output-format=processed"
+```
+
+**Raw format**: with `output-format=raw` the node reads the 16-bit Bayer image from DriveWorks, scales it to 8 bits and demosaics it with OpenCV (bilinear) into `bgr8`. There is no ISP white balance or tone mapping in this path, so colors look flatter than `processed`. RCCB/RCCC sensors are not real Bayer patterns and will show wrong colors with this conversion.
+
+**Camera only (no YOLO)**:
+```bash
+roslaunch drive_yolo camera_only.launch
+# raw sensor data, also publishing the Bayer frames
+roslaunch drive_yolo camera_only.launch \
+  camera_params:="camera-name=F008A120RM0AV2,interface=csi-ab,link=1,output-format=raw" \
+  publish_bayer:=true
+# or with the YOLO launch file
+roslaunch drive_yolo yolo_driveworks.launch enable_yolo:=false
 ```
 
 #### 2. `lidar_camera_fusion_node` (C++)
@@ -634,6 +652,7 @@ roslaunch drive_yolo M8VIL_TFs.launch
 | Launch File | Description |
 |------------|-------------|
 | `yolo_driveworks.launch` | YOLO detection only (DriveWorks camera) |
+| `camera_only.launch` | DriveWorks camera publishing only, no YOLO (processed or raw) |
 | `yolo_ros_camera.launch` | YOLO detection with ROS camera input |
 | `lidar_camera_fusion.launch` | LiDAR-camera fusion node |
 | `lidar_camera_fusion_with_sync.launch` | Fusion with synchronization parameters |

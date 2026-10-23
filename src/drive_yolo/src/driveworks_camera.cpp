@@ -13,6 +13,10 @@ DriveWorksCamera::DriveWorksCamera()
     , image_(DW_NULL_HANDLE)
     , initialized_(false)
     , started_(false)
+    , raw_mode_(false)
+    , bayer_pattern_("RGGB")
+    , raw_bit_depth_(12)
+    , bayer_conversion_code_(cv::COLOR_BayerBG2BGR)
     , image_width_(0)
     , image_height_(0)
 {
@@ -22,10 +26,38 @@ DriveWorksCamera::~DriveWorksCamera() {
     cleanup();
 }
 
-bool DriveWorksCamera::initialize(const std::string& camera_params) {
+bool DriveWorksCamera::initialize(const std::string& camera_params,
+                                  const std::string& bayer_pattern,
+                                  int raw_bit_depth) {
     ROS_INFO("=== ENHANCED DRIVEWORKS CAMERA INITIALIZATION ===");
     ROS_INFO("Camera params: %s", camera_params.c_str());
-    
+
+    // Raw mode: the sensor delivers Bayer data, we debayer it ourselves
+    raw_mode_ = camera_params.find("output-format=raw") != std::string::npos;
+    if (raw_mode_) {
+        // OpenCV names Bayer codes after the 2nd row's pixels, so sensor RGGB == cv BayerBG
+        bayer_pattern_ = bayer_pattern;
+        std::transform(bayer_pattern_.begin(), bayer_pattern_.end(), bayer_pattern_.begin(), ::toupper);
+        if (bayer_pattern_ == "RGGB") {
+            bayer_conversion_code_ = cv::COLOR_BayerBG2BGR;
+        } else if (bayer_pattern_ == "BGGR") {
+            bayer_conversion_code_ = cv::COLOR_BayerRG2BGR;
+        } else if (bayer_pattern_ == "GRBG") {
+            bayer_conversion_code_ = cv::COLOR_BayerGB2BGR;
+        } else if (bayer_pattern_ == "GBRG") {
+            bayer_conversion_code_ = cv::COLOR_BayerGR2BGR;
+        } else {
+            ROS_ERROR("Unsupported bayer_pattern '%s' (use RGGB, BGGR, GRBG or GBRG)", bayer_pattern.c_str());
+            return false;
+        }
+        if (raw_bit_depth < 8 || raw_bit_depth > 16) {
+            ROS_ERROR("raw_bit_depth must be between 8 and 16, got %d", raw_bit_depth);
+            return false;
+        }
+        raw_bit_depth_ = raw_bit_depth;
+        ROS_INFO("RAW mode: bayer pattern %s, %d-bit", bayer_pattern_.c_str(), raw_bit_depth_);
+    }
+
     try {
         if (!initializeDriveWorks()) {
             ROS_ERROR("Failed to initialize DriveWorks context/SAL");
@@ -102,11 +134,19 @@ bool DriveWorksCamera::initialize(const std::string& camera_params) {
         dwImageProperties imageProperties;
         
         // Try different output formats
-        std::vector<dwCameraOutputType> output_formats = {
-            DW_CAMERA_OUTPUT_CUDA_RGBA_UINT8,
-            DW_CAMERA_OUTPUT_NATIVE_PROCESSED, 
-            DW_CAMERA_OUTPUT_NATIVE_RAW
-        };
+        std::vector<dwCameraOutputType> output_formats;
+        if (raw_mode_) {
+            output_formats = {
+                DW_CAMERA_OUTPUT_CUDA_RAW_UINT16,
+                DW_CAMERA_OUTPUT_NATIVE_RAW
+            };
+        } else {
+            output_formats = {
+                DW_CAMERA_OUTPUT_CUDA_RGBA_UINT8,
+                DW_CAMERA_OUTPUT_NATIVE_PROCESSED,
+                DW_CAMERA_OUTPUT_NATIVE_RAW
+            };
+        }
         
         bool format_found = false;
         for (auto format : output_formats) {
@@ -223,7 +263,7 @@ bool DriveWorksCamera::stop() {
     return true;
 }
 
-bool DriveWorksCamera::getNextFrame(cv::Mat& image, uint64_t& timestamp) {
+bool DriveWorksCamera::getNextFrame(cv::Mat& image, uint64_t& timestamp, cv::Mat* raw_bayer) {
     if (!started_) {
         ROS_ERROR("Camera not started");
         return false;
@@ -240,10 +280,13 @@ bool DriveWorksCamera::getNextFrame(cv::Mat& image, uint64_t& timestamp) {
         return false;
     }
     
-    // Get processed image from frame
-    result = dwSensorCamera_getImage(&image_, DW_CAMERA_OUTPUT_CUDA_RGBA_UINT8, frame_);
+    // Get processed (RGBA) or raw (16-bit Bayer) image from frame
+    dwCameraOutputType output_type = raw_mode_ ? DW_CAMERA_OUTPUT_CUDA_RAW_UINT16
+                                               : DW_CAMERA_OUTPUT_CUDA_RGBA_UINT8;
+    result = dwSensorCamera_getImage(&image_, output_type, frame_);
     if (result != DW_SUCCESS) {
-        ROS_ERROR("Failed to get processed image: %s", dwGetStatusName(result));
+        ROS_ERROR_THROTTLE(1, "Failed to get %s image: %s", raw_mode_ ? "raw" : "processed",
+                           dwGetStatusName(result));
         dwSensorCamera_returnFrame(&frame_);
         return false;
     }
@@ -259,12 +302,58 @@ bool DriveWorksCamera::getNextFrame(cv::Mat& image, uint64_t& timestamp) {
     }
     
     // Convert to OpenCV Mat
-    image = dwImageToCvMat(image_);
-    
+    if (raw_mode_) {
+        cv::Mat raw16 = dwRawImageToCvMat(image_);
+        image = raw16.empty() ? cv::Mat() : debayer(raw16);
+        if (raw_bayer) {
+            *raw_bayer = raw16;
+        }
+    } else {
+        image = dwImageToCvMat(image_);
+    }
+
     // Return the frame
     dwSensorCamera_returnFrame(&frame_);
-    
+
     return !image.empty();
+}
+
+cv::Mat DriveWorksCamera::dwRawImageToCvMat(dwImageHandle_t dwImage) {
+    dwImageCUDA* cudaImage;
+    dwStatus result = dwImage_getCUDA(&cudaImage, dwImage);
+    if (result != DW_SUCCESS) {
+        ROS_ERROR_THROTTLE(1, "Failed to get CUDA raw image: %s", dwGetStatusName(result));
+        return cv::Mat();
+    }
+
+    dwImageProperties props;
+    result = dwImage_getProperties(&props, dwImage);
+    if (result != DW_SUCCESS) {
+        ROS_ERROR("Failed to get raw image properties: %s", dwGetStatusName(result));
+        return cv::Mat();
+    }
+
+    // One 16-bit Bayer plane; cudaMemcpy2D drops the row padding for us
+    cv::Mat raw16(props.height, props.width, CV_16UC1);
+    cudaError_t cuda_result = cudaMemcpy2D(raw16.data, raw16.step,
+                                           cudaImage->dptr[0], cudaImage->pitch[0],
+                                           props.width * sizeof(uint16_t), props.height,
+                                           cudaMemcpyDeviceToHost);
+    if (cuda_result != cudaSuccess) {
+        ROS_ERROR("CUDA memcpy (raw) failed: %s", cudaGetErrorString(cuda_result));
+        return cv::Mat();
+    }
+    return raw16;
+}
+
+cv::Mat DriveWorksCamera::debayer(const cv::Mat& raw16) {
+    // Scale N-bit data down to 8 bits, then demosaic (bilinear) to BGR.
+    // No white balance / tone mapping here - colors will look flatter than the ISP output.
+    cv::Mat raw8;
+    raw16.convertTo(raw8, CV_8UC1, 1.0 / static_cast<double>(1 << (raw_bit_depth_ - 8)));
+    cv::Mat bgr;
+    cv::cvtColor(raw8, bgr, bayer_conversion_code_);
+    return bgr;
 }
 
 
