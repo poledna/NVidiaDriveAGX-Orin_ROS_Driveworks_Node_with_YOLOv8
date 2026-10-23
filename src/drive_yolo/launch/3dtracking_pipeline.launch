@@ -32,7 +32,7 @@
     <arg name="lidar_to_camera_translation" default="[0.0, 0.0, 0.0]"/>
 
     <!-- 1. YOLO Detection Node -->
-    <node name="drive_yolo_node" pkg="drive_yolo" type="drive_yolo_node_node" output="screen">
+    <node name="drive_yolo_node" pkg="drive_yolo" type="drive_yolo_node" output="screen">
         <!-- Model configuration -->
         <param name="model_path" value="$(arg model_path)"/>
         

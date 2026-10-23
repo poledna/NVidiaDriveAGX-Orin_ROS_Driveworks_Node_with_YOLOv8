@@ -13,7 +13,7 @@
     
     <!-- YOLO Detection Node - conditional based on use_driveworks -->
     <group if="$(arg use_driveworks)">
-        <node name="drive_yolo_node" pkg="drive_yolo" type="drive_yolo_node_node" output="screen">
+        <node name="drive_yolo_node" pkg="drive_yolo" type="drive_yolo_node" output="screen">
             <param name="model_path" value="$(arg model_path)" />
             <param name="use_driveworks_camera" value="true" />
             <param name="camera_params" value="$(arg camera_params)" />

@@ -362,7 +362,7 @@ This bottom part was AI generated thanks Claude for the help linking libraries a
 
 #### 1. `drive_yolo_node` (C++)
 **Package**: `drive_yolo`
-**Executable**: `drive_yolo_node_node`
+**Executable**: `drive_yolo_node`
 **Source**: `drive_yolo/src/yolo_node.cpp`
 
 YOLO object detection node with TensorRT acceleration.
@@ -393,7 +393,7 @@ YOLO object detection node with TensorRT acceleration.
 
 **Example**:
 ```bash
-rosrun drive_yolo drive_yolo_node_node \
+rosrun drive_yolo drive_yolo_node \
   _model_path:=/models/yolo11n.engine \
   _use_driveworks_camera:=true \
   _camera_params:="camera-name=F008A120RM0AV2,interface=csi-ab,link=1,output-format=processed"
