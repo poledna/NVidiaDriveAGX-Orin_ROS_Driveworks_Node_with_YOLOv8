@@ -8,11 +8,9 @@ A comprehensive ROS Noetic package for NVIDIA DRIVE AGX Orin that integrates YOL
 - [Features](#features)
 - [System Requirements](#system-requirements)
 - [Installation](#installation)
-  - [1. Install NVIDIA DRIVE OS Docker](#1-install-nvidia-drive-os-docker)
-  - [2. Extract Target Filesystem](#2-extract-target-filesystem)
-  - [3. Install ROS Noetic in Target Filesystem](#3-install-ros-noetic-in-target-filesystem)
-  - [4. Cross-Compile ROS Packages](#4-cross-compile-ros-packages)
-  - [5. Setup on Target Device](#5-setup-on-target-device)
+  - [1. Prerequisites](#1-prerequisites)
+  - [2. Cross-Compile](#2-cross-compile)
+  - [3. Setup on Target Device](#3-setup-on-target-device)
 - [Architecture](#architecture)
 - [ROS Nodes](#ros-nodes)
 - [Usage](#usage)
@@ -90,183 +88,56 @@ filterpy>=1.4.5
 ## Installation
 Note as my objective ATM is just to crosscompile the system this doesnt need an NVIDIA GPU on host, im quite sure that also normally you wouldnt need it but just in case you were curious.
 
-### 1. Install NVIDIA DRIVE OS Docker
+The whole sysroot setup (extract the target filesystem, install ROS Noetic in it, copy in TensorRT/DriveWorks/NvMedia, fix symlinks and CMake paths) is scripted in [`docker/Dockerfile`](docker/Dockerfile). The original manual walkthrough is in [docs/MANUAL_CROSS_COMPILE.md](docs/MANUAL_CROSS_COMPILE.md) if you want to see what each step does.
 
-Download and install NVIDIA DRIVE OS 6.0.6 and DriveWorks 5.10 from the [NVIDIA Developer portal](https://developer.nvidia.com/docs/drive/drive-os/6.0.6/public/drive-os-linux-installation/common/topics/installation/docker-ngc/download-install-docker-linux-devzone.html).
-I am using the DRIVE OS 6.0.6 but the workflow should be compatible with 6.0.10. 
-Perhaps 7 (to be tested by someone who has a Thor) I only have an Orin saddly.
+### 1. Prerequisites
 
-Follow the NVIDIA installation guide to:
-- Pull the DRIVE OS Docker container
-```bash
-mkdir nvidia_ws
-export WORKSPACE=~/nvidia_ws
-sudo docker run -it --privileged --name cross_compile --net=host -v /dev/bus/usb:/dev/bus/usb -v ${WORKSPACE}:/home/nvidia/ nvcr.io/drive/driveos-sdk/drive-agx-orin-linux-aarch64-sdk-build-x86:6.0.6.0-0004
-```
-Just be aware this is one line not 2!
-- Extract DriveWorks SDK
-Essentially inside the docker theres is two OS, the one that will be installed (not really but as a method to convey info it is), and the one that compiles and flahes it
-The docker has literally everything you need.
-The thing is, well, depending on how you want to work the data is in an annoying place.
-So Logically this work now becomes a somewhat redundant work about re doing what the really cool guys at NVidia did, but in a way i understand and works... the issue inside the docker is to do some chroots and overlays, because the system is overlayed in an overlay doenst work really nicely, so what i do next is to remove the system from the system.
-Inside the docker with a lot of snooping around you will find a folder with the targetfs. we want that.
-```bash
-docker cp cross_compile:/drive/drive-linux/filesystem/targetfs nvidia_ws/target_fs/
-```
-OK! now we have the crosscompilation environment at the nvidia_ws/target_fs folder!
-Now we need to install inside this work inside this target_fs, Use `chroot` to install ROS Noetic inside the target filesystem. You will need `aptitude` for proper dependency resolution:
-```bash
-# Enter the target filesystem
-export SYSROOT=~/nvidia_ws/target_fs
-cd ${SYSROOT}
+- Docker with BuildKit (any recent Docker) and plenty of free disk space. The NVIDIA SDK image alone is tens of GB.
+- Access to the NVIDIA DRIVE OS 6.0.6 SDK image on NGC ([NVIDIA install guide](https://developer.nvidia.com/docs/drive/drive-os/6.0.6/public/drive-os-linux-installation/common/topics/installation/docker-ngc/download-install-docker-linux-devzone.html)):
+  ```bash
+  docker login nvcr.io
+  ```
+- arm64 emulation, needed only while the image is built (it runs `apt` inside the Orin root filesystem). Run this once per boot:
+  ```bash
+  docker run --privileged --rm tonistiigi/binfmt --install arm64
+  ```
 
-# Mount necessary filesystems
-sudo mount --bind /dev ${SYSROOT}/dev
-sudo mount --bind /proc ${SYSROOT}/proc
-sudo mount --bind /sys ${SYSROOT}/sys
+You don't need the aarch64 cross compiler, ROS, or the Python requirements on your machine. They are all in the container.
 
-# Enter chroot environment
-sudo chroot ${SYSROOT} /bin/bash
-```
-ok this is now kinda wild, because if you are inside the container you may feel like youre outside (?) 
-but if you did correctly you should be super user in the / of the folder
-NOTE: the chroot has no well DNS nameservers youll need to add a DNS in the /etc/resolv.conf (add 'nameserver 1.1.1.1' if in doubt, if cloudfare decided to die try google or any other ofc)
+### 2. Cross-Compile
 
 ```bash
-apt update
-apt install -y aptitude software-properties-common
-add-apt-repository universe
-apt upgrade
-```
-Ok basic stuff, before we continue we need to install some libraries with aptitude.
-the thing is you need to deny the solution a couple times
-
-first thing
-```bash
-aptitude install libboost-all-dev    
-```
-you want the solution that does this
-```bash
-The following actions will resolve these dependencies:
-
-     Downgrade the following packages:
-1)     ibverbs-providers [58mlnx43-1.58101 (now) -> 28.0-1ubuntu1 (focal)]
-2)     libibverbs1 [58mlnx43-1.58101 (now) -> 28.0-1ubuntu1 (focal)]
-3)     librdmacm1 [58mlnx43-1.58101 (now) -> 28.0-1ubuntu1 (focal)]
-4)     perftest [4.5-0.18.gfcddfe0.58101 (now) -> 4.4+0.5-1 (focal)]
-```
-OK that was the "hard" part of the moment!
-
-now we need to install ros noetic as usual
-```bash
-
-# Add ROS Noetic repository
-sh -c 'echo "deb http://packages.ros.org/ros/ubuntu focal main" > /etc/apt/sources.list.d/ros-latest.list'
-apt-key adv --keyserver 'hkp://keyserver.ubuntu.com:80' --recv-key C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654
-
-# Install ROS Noetic using aptitude
-apt update
-apt install ros-noetic-desktop-full
-```
-you definetly dont need ALL these package but well its easy also notice how the apt is pulling from the arm repo^^
-```bash
-# Install build dependencies
-aptitude install -y build-essential cmake python3-rosdep python3-rosinstall \
-  python3-rosinstall-generator python3-wstool \
-  libboost-all-dev libtinyxml-dev libtinyxml2-dev liblz4-dev libbz2-dev \
-  libapr1 libaprutil1 libconsole-bridge-dev libpoco-dev libgpgme-dev \
-  python3-defusedxml python3-rospkg python3-catkin-pkg python3-netifaces \
-  liblog4cxx-dev libopencv-dev
-
-# Exit chroot
-exit
-
-# Unmount filesystems
-sudo umount ${SYSROOT}/dev
-sudo umount ${SYSROOT}/proc
-sudo umount ${SYSROOT}/sys
-```
-as a suggestion as you didmake long impactful changes make a copy from the target_fs folder and save it for a minute until everything is ready just for safety
-
-### 4. Cross-Compile ROS Packages
-
-#### Setup Cross-Compilation Toolchain
-
-```bash
-# Install ARM64 cross-compiler on host
-sudo apt install gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
-
-# Clone this repository
-cd ~/nvidia_ws
 git clone git@github.com:roadview-project/NVidiaDriveAGX-Orin_ROS_Driveworks_Node_with_YOLOv8.git DRIVE_AGX_ORIN_ONNX_ROS_integration
 cd DRIVE_AGX_ORIN_ONNX_ROS_integration
+./cross_compile.sh
 ```
 
-#### Cross-Compile
-OK we are now ready to try and break stuff!!! 
-QUITE Literally most of the symlinks were broken when we copied we need to fix it so do
+The first run builds the `drive-orin-cross:6.0.6` image, which takes a while because ROS is installed under emulation. After that, builds run at native speed and the result is in `install_isolated/`.
+
+| Command | What it does |
+|---|---|
+| `./cross_compile.sh` | Cross-compiles the workspace into `install_isolated/` |
+| `./cross_compile.sh --rebuild-image` | Rebuilds the image first, for example after changing `docker/Dockerfile` |
+| `./cross_compile.sh --shell` | Opens a shell in the cross container (the sysroot is at `/sysroot`) |
+| `./cross_compile.sh --export-sysroot ~/nvidia_ws/target_fs` | Copies the sysroot out of the image, e.g. for IDE code completion |
+| `./cross_compile.sh --host` | The old flow: builds on your machine against `$SYSROOT` (default `~/nvidia_ws/target_fs`) |
+
+Anything else you pass goes to `catkin_make_isolated`, e.g. `./cross_compile.sh -DCMAKE_BUILD_TYPE=Release`.
+
+**Other DRIVE OS versions**: pass a different SDK image, e.g. for 6.0.10:
 ```bash
-python3 fix_symlinks.py
-
+docker build --target cross -t drive-orin-cross:6.0.10 -f docker/Dockerfile \
+  --build-arg DRIVEOS_SDK_IMAGE=nvcr.io/drive/driveos-sdk/<6.0.10 image> .
+IMAGE=drive-orin-cross:6.0.10 ./cross_compile.sh
 ```
-you have to source THE RIGHT ROS.... think like a bootstrap problem. soooo 
+You will probably also need to update the CUDA version (`cuda-11.4`) and `VIBRANTE_PDK_DECIMAL` in `Toolchain-V5L.cmake`.
 
-```bash
-source $SYSROOT/opt/ros/noetic/setup.bash
-```
-but ofc this itself would be just too easy... so you also need to change the line 96 from $SYSROOT/target_fs/opt/ros/noetic/share/tf2_geometry_msgs/cmake/tf2_geometry_msgsConfig.cmake
-to be this:
-```cmake
-set(_include_dirs "include;${CMAKE_SYSROOT}/usr/share/orocos_kdl/cmake/../../../include;${CMAKE_SYSROOT}/usr/include/eigen3")
-```
-if this ROS1 wasnt EOL id complain but thats life ig...
+**How it works**: the Dockerfile has three stages.
+1. `sdk` is NVIDIA's SDK image. It provides the target filesystem and the aarch64 TensorRT/DriveWorks/NvMedia files.
+2. `target` is that filesystem as an arm64 image. ROS is installed in it with plain `apt` (Docker handles DNS, and an apt pin replaces the interactive aptitude downgrade), so it doesn't need a chroot.
+3. `cross` is an x86 Ubuntu 20.04 image with gcc 9 for aarch64, the same compiler version the target uses. The `target` filesystem is copied into it at `/sysroot`. ROS's CMake configs are rewritten to use `${CMAKE_SYSROOT}`, so nothing has to be copied into your host's `/usr`.
 
-ok so now you must be wondering why the hell did we do this like this
-well because we need even more libraries but now from the docker, but from outside the QEMU!
-
-basically, $SYSROOT is missing the tensorRT libs that can be found in /usr/include/aarch64-linux-gnu/ on the docker so we need them!
-lets copy them!
-
-```bash
-docker cp cross_compile:/usr/include/aarch64-linux-gnu/ $SYSROOT/usr/include/
-docker cp cross_compile:/usr/lib/aarch64-linux-gnu/ $SYSROOT/usr/lib/
-docker cp cross_compile:/usr/local/driveworks/targets^Carch64-Linux $SYSROOT/usr/local/driveworks/targets/ #
-docker cp cross_compile:/drive/drive-linux/include/. $SYSROOT/usr/include/
-docker cp cross_compile:/drive/drive-linux/include/nvmedia_6x $SYSROOT/usr/include
-docker cp cross_compile:/drive/drive-linux/include/nvmedia_6x  $SYSROOT/usr/include/
-
-docker cp cross_compile:/drive/drive-linux/include/nvmedia_dla.h $SYSROOT/usr/include/
-docker cp cross_compile:/drive/drive-linux/include/nvmedia_tensor.h $SYSROOT/usr/include/
-docker cp cross_compile:/drive/drive-linux/include/nvmedia_tensormetadata.h $SYSROOT/usr/include/
-
-
-#we also need to make some symlinks so
-cd  ~/nvidia_ws/target_fs/usr/local/driveworks
-ln -s targets/aarch64-Linux/include/ .
-ln -s targets/aarch64-Linux/lib/ .
-cd $SYSROOT/usr/include
-ln -sf nvmedia_6x/nvmedia_core.h nvmedia_image.h
-
-```
-i probably would have a smarter way to do this but this works, the thing is bc we installed ros inside the qemu hes looking for the boost files in the wrong place, even though i changed that in the CMAKE (see in drive_yolo CMAKE) so this is the workaround bc im tired bossman
-```bash
-sudo cp -r $SYSROOT/usr/lib/aarch64-linux-gnu/ /usr/lib/
-sudo ln -s $SYSROOT/usr/include/opencv4 /usr/include/opencv4 # OMG CROSSCOMPILATIOn AHHHH
-```
-because i was very smart and added some python package to the whole package you need now to run (~Smort++~)
-```bash
-
-pip3 install -r  ~/nvidia_ws/DRIVE_AGX_ORIN_ONNX_ROS_integration/src/drive_yolo/requirements.txt
-```
-
-FINALLY this should work now
-
-```bash
-./cross_compile
-
-```
-
-### 5. Setup on Target Device
+### 3. Setup on Target Device
 
 #### Copy Files to Target
 
@@ -277,7 +148,7 @@ scp -r ~/drive-ros/catkin_ws/install_isolated nvidia@<target-ip>:~
 
 #### Install Dependencies on Target
 we need to install the requirements of python AND the ros 1 in the target device
-to do that follow the steps that we used to install ros in the QEMU (see above if you succeded there YOU WILL SUCCEEEED HEEREEE!!)
+to do that follow the ROS install steps from [docs/MANUAL_CROSS_COMPILE.md](docs/MANUAL_CROSS_COMPILE.md) (the same `apt` commands are in `docker/Dockerfile`)
 
 ```bash
 # Setup ROS environment

@@ -569,18 +569,25 @@ target_link_libraries(${PROJECT_NAME}
 
 
 
-add_custom_target(check_python_deps
-    COMMAND ${CMAKE_COMMAND} -E echo "Checking Python dependencies..."
-    COMMAND python3 -c "import motpy\; import numpy\; import scipy\; import sklearn"
-    COMMENT "Checking Python dependencies for 3D tracking"
-)
+# The Python nodes only need these packages on the target, so the check is
+# opt-in: when cross-compiling it would test the build machine's Python.
+option(CHECK_PYTHON_DEPS "Fail the build if the 3D tracking Python deps are missing" OFF)
+if(CHECK_PYTHON_DEPS)
+    add_custom_target(check_python_deps
+        COMMAND ${CMAKE_COMMAND} -E echo "Checking Python dependencies..."
+        COMMAND python3 -c "import motpy\; import numpy\; import scipy\; import sklearn"
+        COMMENT "Checking Python dependencies for 3D tracking"
+    )
+endif()
 
 target_include_directories(${PROJECT_NAME} PUBLIC
     include
     ${TENSORRT_INCLUDE_DIR}
 )
 
-add_dependencies(${PROJECT_NAME}_node check_python_deps)
+if(CHECK_PYTHON_DEPS)
+    add_dependencies(${PROJECT_NAME}_node check_python_deps)
+endif()
 
 install(TARGETS ${PROJECT_NAME}
     ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}

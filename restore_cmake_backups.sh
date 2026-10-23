@@ -1,7 +1,7 @@
 #!/bin/bash
 # restore_cmake_backups.sh
 
-SYSROOT="/home/poledna/nvidia_ws/target_fs"
+SYSROOT="${1:-${SYSROOT:-$HOME/nvidia_ws/target_fs}}"
 
 echo "🔄 Restoring CMake config files from backups..."
 

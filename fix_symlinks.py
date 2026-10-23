@@ -2,9 +2,14 @@
 # fix_sysroot_symlinks.py
 
 import os
+import sys
 from pathlib import Path
 
-SYSROOT = Path("/home/poledna/nvidia_ws/target_fs")
+# Sysroot to fix: first argument, else $SYSROOT, else ~/nvidia_ws/target_fs
+SYSROOT = Path(
+    sys.argv[1] if len(sys.argv) > 1
+    else os.environ.get("SYSROOT", "~/nvidia_ws/target_fs")
+).expanduser()
 
 def fix_symlink(symlink_path):
     """Fix a symlink to be relative within sysroot"""

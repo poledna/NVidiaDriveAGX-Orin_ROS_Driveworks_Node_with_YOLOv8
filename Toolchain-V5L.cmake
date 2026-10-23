@@ -7,7 +7,12 @@ set(CMAKE_SYSTEM_PROCESSOR aarch64)
 set(CMAKE_LIBRARY_ARCHITECTURE aarch64-linux-gnu)
 
 # Paths - centralized for easy maintenance
-set(SYSROOT "$ENV{HOME}/nvidia_ws/target_fs") #you can comment if you want but like why?
+# $SYSROOT is set to /sysroot inside the docker cross container
+if(DEFINED ENV{SYSROOT})
+    set(SYSROOT "$ENV{SYSROOT}")
+else()
+    set(SYSROOT "$ENV{HOME}/nvidia_ws/target_fs")
+endif()
 set(DRIVEWORKS_ROOT "${SYSROOT}/usr/local/driveworks")
 set(CUDA_ROOT "${SYSROOT}/usr/local/cuda-11.4")
 set(TENSORRT_ROOT "${SYSROOT}/usr")

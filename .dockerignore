@@ -1,0 +1,4 @@
+# The image only needs these; keeps the build context small (models, builds).
+*
+!docker/
+!fix_symlinks.py

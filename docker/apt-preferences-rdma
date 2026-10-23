@@ -1,0 +1,5 @@
+# Prefer Ubuntu's RDMA packages over the Mellanox ones preinstalled in targetfs,
+# even when that means a downgrade, so libboost-all-dev can be installed.
+Package: ibverbs-providers libibverbs1 librdmacm1 perftest
+Pin: release o=Ubuntu
+Pin-Priority: 1001
